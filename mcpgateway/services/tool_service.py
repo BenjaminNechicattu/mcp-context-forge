@@ -36,6 +36,7 @@ from mcp.client.streamable_http import streamablehttp_client
 from sqlalchemy import and_, case, delete, desc, Float, func, not_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+import ssl
 
 # First-Party
 from mcpgateway.config import settings
@@ -1248,7 +1249,8 @@ class ToolService:
 
                 elif tool.integration_type == "MCP":
                     transport = tool.request_type.lower()
-                    gateway = db.execute(select(DbGateway).where(DbGateway.id == tool.gateway_id).where(DbGateway.enabled)).scalar_one_or_none()
+                    # gateway = db.execute(select(DbGateway).where(DbGateway.id == tool.gateway_id).where(DbGateway.enabled)).scalar_one_or_none()
+                    gateway = tool.gateway
 
                     # Handle OAuth authentication for the gateway
                     if gateway and gateway.auth_type == "oauth" and gateway.oauth_config:
@@ -1291,6 +1293,44 @@ class ToolService:
                     if request_headers:
                         headers = get_passthrough_headers(request_headers, headers, db, gateway)
 
+                    def create_ssl_context(ca_bytes: bytes) -> ssl.SSLContext:
+                        """Create an SSL context with the provided CA certificate.
+
+                        Args:
+                            ca_bytes: CA certificate in bytes
+
+                        Returns:
+                            ssl.SSLContext: Configured SSL context
+                        """
+                        ctx = ssl.create_default_context()
+                        ctx.load_verify_locations(cadata=ca_bytes)
+                        return ctx
+                    
+                    def get_httpx_client_factory(
+                        headers: dict[str, str] | None = None,
+                        timeout: httpx.Timeout | None = None,
+                        auth: httpx.Auth | None = None,
+                    ) -> httpx.AsyncClient:
+                        """Factory function to create httpx.AsyncClient with optional CA certificate.
+                        
+                        Args:
+                            headers: Optional headers for the client
+                            timeout: Optional timeout for the client
+                            auth: Optional auth for the client
+
+                        Returns:
+                            httpx.AsyncClient: Configured HTTPX async client
+                        """
+                        if gateway.ca_certificate:
+                            ctx = create_ssl_context(gateway.ca_certificate)
+                        return httpx.AsyncClient(
+                            verify=ctx if 'ctx' in locals() else True,
+                            follow_redirects=True,
+                            headers=headers,
+                            timeout=timeout or httpx.Timeout(30.0),
+                            auth=auth,
+                        )
+                    
                     async def connect_to_sse_server(server_url: str, headers: dict = headers):
                         """Connect to an MCP server running with SSE transport.
 
@@ -1301,7 +1341,7 @@ class ToolService:
                         Returns:
                             ToolResult: Result of tool call
                         """
-                        async with sse_client(url=server_url, headers=headers) as streams:
+                        async with sse_client(url=server_url, headers=headers, httpx_client_factory=get_httpx_client_factory) as streams:
                             async with ClientSession(*streams) as session:
                                 await session.initialize()
                                 tool_call_result = await session.call_tool(tool.original_name, arguments)
@@ -1317,7 +1357,7 @@ class ToolService:
                         Returns:
                             ToolResult: Result of tool call
                         """
-                        async with streamablehttp_client(url=server_url, headers=headers) as (read_stream, write_stream, _get_session_id):
+                        async with streamablehttp_client(url=server_url, headers=headers, httpx_client_factory=get_httpx_client_factory) as (read_stream, write_stream, _get_session_id):
                             async with ClientSession(read_stream, write_stream) as session:
                                 await session.initialize()
                                 tool_call_result = await session.call_tool(tool.original_name, arguments)
