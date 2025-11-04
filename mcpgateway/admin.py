@@ -118,6 +118,7 @@ from mcpgateway.utils.pagination import generate_pagination_links
 from mcpgateway.utils.passthrough_headers import PassthroughHeadersError
 from mcpgateway.utils.retry_manager import ResilientHttpClient
 from mcpgateway.utils.services_auth import decode_auth
+from mcpgateway.utils.validate_signature import sign_data
 
 # Conditional imports for gRPC support (only if grpcio is installed)
 try:
@@ -6276,8 +6277,11 @@ async def admin_add_gateway(request: Request, db: Session = Depends(get_db), use
             file = form["ca_certificate"]
             if isinstance(file, StarletteUploadFile):
                 content = await file.read()
-                ca_certificate = content.decode("utf-8")
+                ca_certificate = content.decode("utf-8").strip()
                 LOGGER.info("✅ CA certificate file uploaded successfully")
+
+                private_key_pem = settings.ed25519_private_key.get_secret_value()
+                sig = sign_data(ca_certificate.encode(), private_key_pem)
 
         gateway = GatewayCreate(
             name=str(form["name"]),
@@ -6296,6 +6300,8 @@ async def admin_add_gateway(request: Request, db: Session = Depends(get_db), use
             passthrough_headers=passthrough_headers,
             visibility=visibility,
             ca_certificate=ca_certificate,
+            ca_certificate_sig=sig if sig else None,
+            signing_algorithm="ed25519" if sig else None,
         )
     except KeyError as e:
         # Convert KeyError to ValidationError-like response
