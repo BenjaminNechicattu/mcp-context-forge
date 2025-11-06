@@ -1061,7 +1061,6 @@ class PromptService:
             >>> result == prompt_dict
             True
         """
-        logger.info(f"prompt_id:::{prompt_id}")
         prompt = db.get(DbPrompt, prompt_id)
         if not prompt:
             raise PromptNotFoundError(f"Prompt not found: {prompt_id}")
