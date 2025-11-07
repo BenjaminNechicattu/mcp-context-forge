@@ -67,6 +67,7 @@ from mcpgateway.config import settings
 from mcpgateway.db import refresh_slugs_on_startup, SessionLocal
 from mcpgateway.db import Tool as DbTool
 from mcpgateway.handlers.sampling import SamplingHandler
+from mcpgateway.middleware.api_auth_middleware import APIAuthMiddleware, get_api_auth_middleware_config
 from mcpgateway.middleware.rbac import get_current_user_with_permissions, require_permission
 from mcpgateway.middleware.request_logging_middleware import RequestLoggingMiddleware
 from mcpgateway.middleware.security_headers import SecurityHeadersMiddleware
@@ -985,6 +986,19 @@ else:
 
 # Add security headers middleware
 app.add_middleware(SecurityHeadersMiddleware)
+
+# Add API authentication middleware (if enabled)
+# This middleware validates authentication for incoming API requests using the plugin system
+if settings.auth_required and plugin_manager:
+    api_auth_config = get_api_auth_middleware_config(plugin_manager=plugin_manager)
+    app.add_middleware(
+        middleware_class=APIAuthMiddleware,
+        plugin_manager=api_auth_config["plugin_manager"],
+        require_auth=api_auth_config["require_auth"],
+    )
+    logger.info("🔐 API Authentication Middleware enabled - using auth_pre_check plugin")
+else:
+    logger.info("🔓 API Authentication Middleware disabled - AUTH_REQUIRED=false or plugins disabled")
 
 # Add token scoping middleware (only when email auth is enabled)
 if settings.email_auth_enabled:

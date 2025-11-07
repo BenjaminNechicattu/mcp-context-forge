@@ -93,6 +93,31 @@ async def get_current_user_with_permissions(
             async def protected_route(user = Depends(get_current_user_with_permissions)):
                 return {"user": user["email"]}
     """
+    # Check if the API auth middleware (plugin-based) has already authenticated the user
+    # This allows the plugin system to handle authentication instead of RBAC
+    logger.info(f"🔍 RBAC: Checking for plugin authentication - hasattr={hasattr(request.state, 'jwt_claims')}")
+    if hasattr(request.state, "jwt_claims"):
+        logger.info(f"🔍 RBAC: jwt_claims exists, value={bool(request.state.jwt_claims)}")
+        if request.state.jwt_claims:
+            jwt_claims = request.state.jwt_claims
+            logger.info(f"✅ RBAC: Using authentication from API auth middleware (plugin-based)")
+            logger.info(f"   User: {jwt_claims.get('username') or jwt_claims.get('sub')}")
+
+            # Create a user object from JWT claims for RBAC compatibility
+            return {
+                "email": jwt_claims.get("username") or jwt_claims.get("sub"),
+                "full_name": jwt_claims.get("name", "Plugin Authenticated User"),
+                "is_admin": jwt_claims.get("is_admin", False),
+                "ip_address": request.client.host if request.client else None,
+                "user_agent": request.headers.get("user-agent"),
+                "db": db,
+                "jwt_claims": jwt_claims,  # Include original claims for reference
+            }
+        else:
+            logger.info("⚠️ RBAC: jwt_claims attribute exists but is None/empty")
+    else:
+        logger.info("⚠️ RBAC: No jwt_claims attribute found on request.state")
+
     # Try multiple sources for the token, prioritizing manual cookie reading
     token = None
 

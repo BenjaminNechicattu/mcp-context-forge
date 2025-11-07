@@ -42,6 +42,10 @@ from mcpgateway.plugins.framework.models import (
     Config,
     GlobalContext,
     HookType,
+    HttpPostForwardingCallPayload,
+    HttpPostForwardingCallResult,
+    HttpPreForwardingCallPayload,
+    HttpPreForwardingCallResult,
     PluginCondition,
     PluginContext,
     PluginContextTable,
@@ -76,6 +80,8 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar(
     "T",
+    HttpPostForwardingCallPayload,
+    HttpPreForwardingCallPayload,
     PromptPosthookPayload,
     PromptPrehookPayload,
     ResourcePostFetchPayload,
@@ -460,6 +466,34 @@ async def post_resource_fetch(plugin: PluginRef, payload: ResourcePostFetchPaylo
     return await plugin.plugin.resource_post_fetch(payload, context)
 
 
+async def http_pre_forwarding_call(plugin: PluginRef, payload: HttpPreForwardingCallPayload, context: PluginContext) -> HttpPreForwardingCallResult:
+    """Call plugin's HTTP pre-forwarding hook.
+
+    Args:
+        plugin: The plugin to execute.
+        payload: The HTTP request payload to be analyzed.
+        context: The plugin context.
+
+    Returns:
+        HttpPreForwardingCallResult with processing status.
+    """
+    return await plugin.plugin.http_pre_forwarding_call(payload, context)
+
+
+async def http_post_forwarding_call(plugin: PluginRef, payload: HttpPostForwardingCallPayload, context: PluginContext) -> HttpPostForwardingCallResult:
+    """Call plugin's HTTP post-forwarding hook.
+
+    Args:
+        plugin: The plugin to execute.
+        payload: The HTTP response payload to be analyzed.
+        context: The plugin context.
+
+    Returns:
+        HttpPostForwardingCallResult with processing status.
+    """
+    return await plugin.plugin.http_post_forwarding_call(payload, context)
+
+
 class PluginManager:
     """Plugin manager for managing the plugin lifecycle.
 
@@ -504,6 +538,8 @@ class PluginManager:
     _post_tool_executor: PluginExecutor[ToolPostInvokePayload] = PluginExecutor[ToolPostInvokePayload]()
     _resource_pre_executor: PluginExecutor[ResourcePreFetchPayload] = PluginExecutor[ResourcePreFetchPayload]()
     _resource_post_executor: PluginExecutor[ResourcePostFetchPayload] = PluginExecutor[ResourcePostFetchPayload]()
+    _http_pre_forwarding_executor: PluginExecutor[HttpPreForwardingCallPayload] = PluginExecutor[HttpPreForwardingCallPayload]()
+    _http_post_forwarding_executor: PluginExecutor[HttpPostForwardingCallPayload] = PluginExecutor[HttpPostForwardingCallPayload]()
 
     # Context cleanup tracking
     _context_store: Dict[str, Tuple[PluginContextTable, float]] = {}
@@ -534,12 +570,16 @@ class PluginManager:
         self._post_tool_executor.timeout = timeout
         self._resource_pre_executor.timeout = timeout
         self._resource_post_executor.timeout = timeout
+        self._http_pre_forwarding_executor.timeout = timeout
+        self._http_post_forwarding_executor.timeout = timeout
         self._pre_prompt_executor.config = self._config
         self._post_prompt_executor.config = self._config
         self._pre_tool_executor.config = self._config
         self._post_tool_executor.config = self._config
         self._resource_pre_executor.config = self._config
         self._resource_post_executor.config = self._config
+        self._http_pre_forwarding_executor.config = self._config
+        self._http_post_forwarding_executor.config = self._config
 
         # Initialize context tracking if not already done
         if not hasattr(self, "_context_store"):
@@ -994,4 +1034,62 @@ class PluginManager:
         if global_context.request_id in self._context_store:
             del self._context_store[global_context.request_id]
 
+
+    async def execute_hooks(
+        self,
+        hook_type: HookType,
+        payload: HttpPreForwardingCallPayload | HttpPostForwardingCallPayload,
+        global_context: GlobalContext,
+        local_contexts: Optional[PluginContextTable] = None,
+    ) -> Any:
+        """Execute hooks for HTTP forwarding operations.
+
+        This is a generic method that can execute any hook type, but is primarily
+        used for HTTP_PRE_FORWARDING_CALL and HTTP_POST_FORWARDING_CALL hooks.
+
+        Args:
+            hook_type: The type of hook to execute.
+            payload: The payload for the hook.
+            global_context: Shared context for all plugins.
+            local_contexts: Optional existing contexts from previous executions.
+
+        Returns:
+            PluginResult with processing status and modified payload.
+        """
+        # Get plugins configured for this hook
+        plugins = self._registry.get_plugins_for_hook(hook_type)
+
+        print("#### excute hook")
+
+        if hook_type == HookType.HTTP_PRE_FORWARDING_CALL:
+            result = await self._http_pre_forwarding_executor.execute(
+                plugins,
+                payload,  # type: ignore
+                global_context,
+                http_pre_forwarding_call,
+                lambda p, c, g: True,  # No filtering for HTTP hooks
+                local_contexts,
+                False,  # Don't raise violations as exceptions
+            )
+        elif hook_type == HookType.HTTP_POST_FORWARDING_CALL:
+            result = await self._http_post_forwarding_executor.execute(
+                plugins,
+                payload,  # type: ignore
+                global_context,
+                http_post_forwarding_call,
+                lambda p, c, g: True,  # No filtering for HTTP hooks
+                local_contexts,
+                False,  # Don't raise violations as exceptions
+            )
+        else:
+            # For other hook types, return a default result
+            return PluginResult(
+                continue_processing=True,
+                modified_payload=payload,
+                violation=None,
+                metadata={}
+            )
+
+        # Return just the result, not the tuple
+        return result[0]
         return result

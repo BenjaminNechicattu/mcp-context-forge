@@ -899,3 +899,28 @@ plugins:
         api_key: "" # optional, can define ANTHROPIC_API_KEY instead
       model_id: "ibm/granite-3-3-8b-instruct" # note that this changes depending on provider
       length_threshold: 100000
+
+  # WXO_AUTH_CHECK: Authentication validation before HTTP forwarding
+  - name: "WxoAuthCheck"
+    kind: "plugins.auth_pre_check.auth_pre_check.WxoAuthCheckPlugin"
+    description: "Validates authentication headers before HTTP forwarding calls to tools and gateways"
+    version: "1.0.0"
+    author: "MCP Context Forge Team"
+    hooks: ["http_pre_forwarding_call"]
+    tags: ["security", "authentication", "http", "validation", "wxo"]
+    mode: "enforce"  # enforce | permissive | disabled
+    priority: 15  # Run early, before actual HTTP calls
+    conditions: []
+    config:
+      # Require authentication for all requests
+      require_auth: true
+      # Allowed authentication types
+      allowed_auth_types: ["bearer", "basic", "api_key"]
+      # Validate token format (e.g., JWT structure)
+      check_token_format: false
+      # Block requests with missing authentication
+      block_on_missing_auth: true
+      # URLs that don't require authentication (optional)
+      allow_unauthenticated_urls: null
+      # Custom authentication header name
+      custom_auth_header: "Authorization"

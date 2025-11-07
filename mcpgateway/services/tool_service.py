@@ -49,7 +49,15 @@ from mcpgateway.models import TextContent
 from mcpgateway.models import Tool as PydanticTool
 from mcpgateway.models import ToolResult
 from mcpgateway.observability import create_span
-from mcpgateway.plugins.framework import GlobalContext, HttpHeaderPayload, PluginError, PluginManager, PluginViolationError, ToolPostInvokePayload, ToolPreInvokePayload
+from mcpgateway.plugins.framework import (
+    GlobalContext,
+    HttpHeaderPayload,
+    PluginError,
+    PluginManager,
+    PluginViolationError,
+    ToolPostInvokePayload,
+    ToolPreInvokePayload,
+)
 from mcpgateway.plugins.framework.constants import GATEWAY_METADATA, TOOL_METADATA
 from mcpgateway.schemas import ToolCreate, ToolRead, ToolUpdate, TopPerformer
 from mcpgateway.services.logging_service import LoggingService
@@ -1043,6 +1051,7 @@ class ToolService:
 
                     # Use the tool's request_type rather than defaulting to POST.
                     method = tool.request_type.upper()
+
                     if method == "GET":
                         response = await self._http_client.get(final_url, params=payload, headers=headers)
                     else:
@@ -1167,6 +1176,7 @@ class ToolService:
                                 headers = payload.headers.model_dump()
 
                     tool_call_result = ToolResult(content=[TextContent(text="", type="text")])
+
                     if transport == "sse":
                         tool_call_result = await connect_to_sse_server(tool_gateway.url, headers=headers)
                     elif transport == "streamablehttp":

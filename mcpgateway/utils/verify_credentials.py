@@ -99,12 +99,15 @@ async def verify_jwt_token(token: str) -> dict:
             if settings.require_token_expiration:
                 raise jwt.MissingRequiredClaimError("exp")
 
-        options = {}
+        options = {
+            "verify_aud": settings.jwt_audience_verification,
+        }
 
         if settings.require_token_expiration:
             options["require"] = ["exp"]
-
-        options["verify_aud"] = settings.jwt_audience_verification
+        else:
+            # When expiration is not required, only require 'sub' claim, not 'exp'
+            options["require"] = ["sub"]
 
         decode_kwargs = {
             "key": get_jwt_public_key_or_secret(),

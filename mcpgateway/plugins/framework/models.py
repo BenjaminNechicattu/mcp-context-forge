@@ -37,6 +37,8 @@ class HookType(str, Enum):
         tool_post_invoke: The tool post invoke hook.
         resource_pre_fetch: The resource pre fetch hook.
         resource_post_fetch: The resource post fetch hook.
+        http_pre_forwarding_call: The HTTP pre forwarding hook (before HTTP requests to tools/gateways).
+        http_post_forwarding_call: The HTTP post forwarding hook (after HTTP requests to tools/gateways).
 
     Examples:
         >>> HookType.PROMPT_PRE_FETCH
@@ -55,6 +57,8 @@ class HookType(str, Enum):
     TOOL_POST_INVOKE = "tool_post_invoke"
     RESOURCE_PRE_FETCH = "resource_pre_fetch"
     RESOURCE_POST_FETCH = "resource_post_fetch"
+    HTTP_PRE_FORWARDING_CALL = "http_pre_forwarding_call"
+    HTTP_POST_FORWARDING_CALL = "http_post_forwarding_call"
 
 
 class PluginMode(str, Enum):
@@ -1115,4 +1119,71 @@ class ResourcePostFetchPayload(BaseModel):
 
 
 ResourcePreFetchResult = PluginResult[ResourcePreFetchPayload]
+
+
+class HttpPreForwardingCallPayload(BaseModel):
+    """Payload for HTTP pre-forwarding hook (before making HTTP requests to tools/gateways).
+
+    Attributes:
+        url: The target URL for the HTTP request.
+        method: The HTTP method (GET, POST, etc.).
+        headers: HTTP headers to be sent.
+        payload: The request payload/body.
+        context: Additional contextual information about the request.
+
+    Examples:
+        >>> payload = HttpPreForwardingCallPayload(
+        ...     url="https://api.example.com/tool",
+        ...     method="POST",
+        ...     headers={"Content-Type": "application/json"},
+        ...     payload={"query": "test"}
+        ... )
+        >>> payload.url
+        'https://api.example.com/tool'
+        >>> payload.method
+        'POST'
+    """
+
+    url: str
+    method: str
+    headers: dict[str, str] = Field(default_factory=dict)
+    payload: Optional[dict[str, Any]] = Field(default_factory=dict)
+    context: Optional[dict[str, Any]] = Field(default_factory=dict)
+
+
+class HttpPostForwardingCallPayload(BaseModel):
+    """Payload for HTTP post-forwarding hook (after receiving HTTP responses from tools/gateways).
+
+    Attributes:
+        url: The target URL that was called.
+        method: The HTTP method that was used.
+        status_code: The HTTP response status code.
+        headers: HTTP response headers received.
+        response: The response body/content.
+        context: Additional contextual information about the response.
+
+    Examples:
+        >>> payload = HttpPostForwardingCallPayload(
+        ...     url="https://api.example.com/tool",
+        ...     method="POST",
+        ...     status_code=200,
+        ...     headers={"Content-Type": "application/json"},
+        ...     response={"result": "success"}
+        ... )
+        >>> payload.status_code
+        200
+        >>> payload.response
+        {'result': 'success'}
+    """
+
+    url: str
+    method: str
+    status_code: int
+    headers: dict[str, str] = Field(default_factory=dict)
+    response: Any = None
+    context: Optional[dict[str, Any]] = Field(default_factory=dict)
+
+
+HttpPreForwardingCallResult = PluginResult[HttpPreForwardingCallPayload]
+HttpPostForwardingCallResult = PluginResult[HttpPostForwardingCallPayload]
 ResourcePostFetchResult = PluginResult[ResourcePostFetchPayload]
