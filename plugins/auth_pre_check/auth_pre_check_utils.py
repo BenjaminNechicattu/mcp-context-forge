@@ -268,11 +268,48 @@ async def create_team(tenant_id: str, team_slug: str | None = None, user_email: 
         db = next(db_gen)
 
         try:
-            # Import TeamManagementService
+            # Import required services
             from mcpgateway.services.team_management_service import TeamManagementService
+            from mcpgateway.db import EmailUser
 
             # Create team management service instance
             team_service = TeamManagementService(db)
+
+            # Ensure user exists in email_users table before creating team
+            # This is required because email_teams.created_by has a foreign key constraint
+            existing_user = db.query(EmailUser).filter(EmailUser.email == user_email).first()
+
+            if not existing_user:
+                # Create the user if they don't exist
+                logger.info(f"Creating user '{user_email}' in email_users table for team creation")
+                # Import utc_now for timestamp and argon2 for password hashing
+                from mcpgateway.db import utc_now
+                from argon2 import PasswordHasher
+
+                # Set default password for SSO users
+                # Users should change this password after first login or continue using SSO
+                default_password = "changeme"
+
+                # Use Argon2 directly to hash the password
+                ph = PasswordHasher()
+                password_hash = ph.hash(default_password)
+
+                # Extract full name from JWT claims if available
+                full_name = user_email.split('@')[0]  # Default to email prefix
+
+                new_user = EmailUser(
+                    email=user_email,
+                    password_hash=password_hash,  # Set Argon2 hashed default password
+                    full_name=full_name,
+                    is_active=True,
+                    is_admin=True,  # Grant admin privileges to token-authenticated users
+                    email_verified_at=utc_now()  # Auto-verify since they're authenticated via JWT
+                )
+                db.add(new_user)
+                db.commit()
+                db.refresh(new_user)
+                logger.info(f"Successfully created user '{user_email}' with admin privileges in email_users table")
+                logger.info(f"Default password set to 'changeme'. User can login with this password or use SSO/token authentication.")
 
             # Create the team using the service (await since we're now async)
             # Use the authenticated user's email as created_by to satisfy foreign key constraint
