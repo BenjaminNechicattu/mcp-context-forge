@@ -15,6 +15,27 @@ plugin_settings:
   plugin_health_check_interval: 120
 
 plugins:
+  # WXO Auth Check Plugin - HTTP Authentication Validation
+  - name: "WxoAuthCheck"
+    kind: "plugins.auth_pre_check.auth_pre_check.WxoAuthCheckPlugin"
+    description: "Validates authentication headers and manages tenant/team mappings for WXO"
+    version: "1.0.0"
+    author: "MCP Context Forge Team"
+    hooks: ["http_auth_resolve_user", "http_post_request"]
+    tags: ["security", "authentication", "jwt", "tenant", "team"]
+    mode: "permissive"  # Use permissive mode to allow fallback to standard auth
+    priority: 10  # Run early in the pipeline (lower = higher priority)
+    conditions: []  # Apply to all requests
+    config:
+      require_auth: true
+      allowed_auth_types: ["bearer"]
+      check_token_format: true
+      block_on_missing_auth: false  # Let standard auth handle missing tokens
+      auth_header: "Authorization"
+      auto_create_teams: true
+      audit_auth_attempts: true
+      strict_mode: false  # false = fallback to standard auth, true = block invalid tokens
+
   # Argument Normalizer - stabilize inputs before anything else
   - name: "ArgumentNormalizer"
     kind: "plugins.argument_normalizer.argument_normalizer.ArgumentNormalizerPlugin"
