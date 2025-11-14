@@ -21,7 +21,7 @@ plugins:
     description: "Validates authentication headers and manages tenant/team mappings for WXO"
     version: "1.0.0"
     author: "MCP Context Forge Team"
-    hooks: ["http_auth_resolve_user", "http_post_request"]
+    hooks: ["http_auth_resolve_user", "http_pre_request", "http_post_request"]
     tags: ["security", "authentication", "jwt", "tenant", "team"]
     mode: "permissive"  # Use permissive mode to allow fallback to standard auth
     priority: 10  # Run early in the pipeline (lower = higher priority)

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Location: ./plugins/auth_pre_check/auth_pre_check.py
 Copyright 2025
 SPDX-License-Identifier: Apache-2.0
@@ -26,17 +25,20 @@ from __future__ import annotations
 
 # Standard
 import logging
-from typing import Any
 from datetime import datetime, timezone
+from typing import Any
 
 # Third-Party
 from pydantic import BaseModel
 
 # First-Party
+from mcpgateway.db import get_db
 from mcpgateway.plugins.framework import (
     HttpAuthResolveUserPayload,
     HttpPostRequestPayload,
     HttpPostRequestResult,
+    HttpPreRequestPayload,
+    HttpPreRequestResult,
     Plugin,
     PluginConfig,
     PluginContext,
@@ -189,11 +191,13 @@ class WxoAuthCheckPlugin(Plugin):
         logger.info(f"[WXO_AUTH] Extracted tenant ID: {tenant_id}")
 
         # Get or create team for tenant
+        # Note: get_tenant_team_slug() uses get_db() internally
         team_slug: str | None = get_tenant_team_slug(tenant_id)
+        logger.info(f"[WXO_AUTH] Team lookup for tenant {tenant_id}: found={team_slug is not None}")
 
         if not team_slug and self._cfg.auto_create_teams:
             try:
-                # Extract user email for team creation (optional)
+                # Extract user email for team creation (required for FK constraint)
                 user_email = (
                     jwt_claims.get("email")
                     or jwt_claims.get("username")
@@ -203,24 +207,49 @@ class WxoAuthCheckPlugin(Plugin):
                     or jwt_claims.get("sub")
                 )
 
-                logger.info(f"[WXO_AUTH] Creating team for tenant {tenant_id}")
-                team_slug = await create_team(tenant_id, user_email=user_email)
-                logger.info(f"[WXO_AUTH] Created team '{team_slug}' for tenant {tenant_id}")
+                logger.info(f"[WXO_AUTH] Creating team for tenant {tenant_id} with user_email={user_email}")
 
+                # Create team (function handles its own DB session via get_db())
+                team_slug = await create_team(
+                    tenant_id=tenant_id,
+                    user_email=user_email,
+                )
+
+                logger.info(f"[WXO_AUTH] ✅ Successfully created team '{team_slug}' for tenant {tenant_id}")
+
+                # Verify team was actually created
+                verification_slug = get_tenant_team_slug(tenant_id)
+                if verification_slug != team_slug:
+                    logger.error(f"[WXO_AUTH] Team verification failed! Expected {team_slug}, got {verification_slug}")
+                    raise PluginViolationError(
+                        message="Team verification failed",
+                        violation=PluginViolation(
+                            reason="Team verification failed",
+                            description=f"Team created but verification failed: expected {team_slug}, got {verification_slug}",
+                            code="TEAM_VERIFICATION_FAILED",
+                            details={"expected": team_slug, "actual": verification_slug},
+                        ),
+                    )
+
+                logger.info(f"[WXO_AUTH] ✅ Team creation verified: {verification_slug}")
+
+            except PluginViolationError:
+                # Re-raise plugin violations as-is
+                raise
             except Exception as e:
-                logger.error(f"[WXO_AUTH] Failed to create team for tenant {tenant_id}: {e}", exc_info=True)
+                logger.error(f"[WXO_AUTH] ❌ Failed to create team for tenant {tenant_id}: {e}", exc_info=True)
                 raise PluginViolationError(
                     message=f"Failed to create team: {e}",
                     violation=PluginViolation(
                         reason="Team creation failed",
-                        description=f"Could not create team for tenant {tenant_id}",
+                        description=f"Could not create team for tenant {tenant_id}: {str(e)}",
                         code="TEAM_CREATION_FAILED",
                         details={"tenant_id": tenant_id, "error": str(e)},
                     ),
                 )
 
         if not team_slug:
-            logger.error(f"[WXO_AUTH] No team found for tenant {tenant_id}")
+            logger.error(f"[WXO_AUTH] No team found for tenant {tenant_id} and auto-creation disabled")
             raise PluginViolationError(
                 message=f"No team found for tenant {tenant_id}",
                 violation=PluginViolation(
@@ -230,6 +259,8 @@ class WxoAuthCheckPlugin(Plugin):
                     details={"tenant_id": tenant_id},
                 ),
             )
+
+        logger.info(f"[WXO_AUTH] Using team_slug: {team_slug}")
 
         # Generate team token for subsequent operations
         try:
@@ -272,9 +303,44 @@ class WxoAuthCheckPlugin(Plugin):
             or f"Team {team_slug}"
         )
 
+        # Look up the team in the database to get its UUID
+        # The team was created/retrieved using tenant_id as the slug
+        # We need the database-generated UUID (team.id) for gateway registration
+        from mcpgateway.db import EmailTeam
+
+        db_gen = get_db()
+        db = next(db_gen)
+        try:
+            team_record = db.query(EmailTeam).filter(EmailTeam.slug == team_slug).first()
+            if team_record:
+                team_id_for_gateway = team_record.id
+                logger.info(f"[WXO_AUTH] Found team in database: UUID={team_id_for_gateway}, slug={team_slug}")
+            else:
+                # Fallback: use tenant_id if team not found (shouldn't happen)
+                team_id_for_gateway = tenant_id
+                logger.warning(f"[WXO_AUTH] Team not found in database for slug '{team_slug}', using tenant_id as fallback")
+        finally:
+            db_gen.close()
+
+        # Store team_id in both plugin context AND global context
+        # The global context state is accessible to other parts of the application
+        # This allows the gateway registration endpoint to retrieve the team_id
+        context.set_state("wxo_team_id", team_id_for_gateway)
+        context.set_state("wxo_tenant_id", tenant_id)
+        context.set_state("wxo_team_slug", team_slug)
+
+        # Also store in global context for broader access
+        context.global_context.state["wxo_team_id"] = team_id_for_gateway
+        context.global_context.state["wxo_tenant_id"] = tenant_id
+        context.global_context.state["wxo_team_slug"] = team_slug
+
+        logger.info("[WXO_AUTH] Stored team context in plugin state and global context for downstream access")
+
         # Return synthetic user with team context embedded
         # The auth system requires an EmailUser-compatible dict
-        logger.info("[WXO_AUTH] Token exchange completed successfully")
+        logger.info("[WXO_AUTH] ========== Token exchange completed successfully ==========")
+        logger.info(f"[WXO_AUTH] team_slug={team_slug}, team_id={team_id_for_gateway}, tenant_id={tenant_id}")
+
         return PluginResult(
             modified_payload={
                 "email": user_email,
@@ -287,6 +353,7 @@ class WxoAuthCheckPlugin(Plugin):
                 "updated_at": datetime.now(timezone.utc),
                 # Additional team context (accessible via request.state)
                 "team_slug": team_slug,
+                "team_id": team_id_for_gateway,  # Use tenant_id as team_id
                 "tenant_id": tenant_id,
                 "team_token": team_token,
                 "auth_type": "wxo_team",
@@ -296,6 +363,7 @@ class WxoAuthCheckPlugin(Plugin):
                 "auth_method": "wxo_team_exchange",
                 "tenant_id": tenant_id,
                 "team_slug": team_slug,
+                "team_id": team_id_for_gateway,  # Use tenant_id as team_id
                 "token_exchanged": True,
                 "team_token": team_token,  # Include in metadata for downstream use
                 "token_expires_at": datetime.now(timezone.utc).timestamp() + (self._cfg.team_token_expiry_minutes * 60),
@@ -354,6 +422,89 @@ class WxoAuthCheckPlugin(Plugin):
             continue_processing=True,
             metadata=metadata,
         )
+
+    async def http_pre_request(
+        self, payload: HttpPreRequestPayload, context: PluginContext
+    ) -> HttpPreRequestResult:
+        """Inject team_id into gateway/server/tool/resource/prompt creation requests.
+
+        This hook intercepts POST requests to creation endpoints and injects the
+        team_id from the WXO authentication context into the request body.
+
+        Args:
+            payload: HTTP pre-request payload with method, path, and body.
+            context: Plugin execution context with team state.
+
+        Returns:
+            Result with modified request body containing team_id.
+        """
+        logger.info(f"[WXO_AUTH] http_pre_request called: {payload.method} {payload.path}")
+
+        # Only process POST requests to creation endpoints
+        if payload.method != "POST":
+            logger.debug(f"[WXO_AUTH] Skipping non-POST request: {payload.method}")
+            return HttpPreRequestResult(continue_processing=True)
+
+        # Check if this is a creation endpoint that needs team_id injection
+        creation_endpoints = ["/gateways", "/servers", "/tools", "/resources", "/prompts"]
+        is_creation_request = any(payload.path.startswith(endpoint) or payload.path == endpoint for endpoint in creation_endpoints)
+
+        if not is_creation_request:
+            logger.debug(f"[WXO_AUTH] Skipping non-creation endpoint: {payload.path}")
+            return HttpPreRequestResult(continue_processing=True)
+
+        logger.info(f"[WXO_AUTH] Processing creation request: {payload.method} {payload.path}")
+
+        # Get team context from global context (set during authentication)
+        team_id = context.global_context.state.get("wxo_team_id")
+        tenant_id = context.global_context.state.get("wxo_tenant_id")
+
+        logger.info(f"[WXO_AUTH] Team context from global state: team_id={team_id}, tenant_id={tenant_id}")
+        logger.info(f"[WXO_AUTH] Global context state keys: {list(context.global_context.state.keys())}")
+
+        if not team_id:
+            # No WXO team context available, let request proceed unchanged
+            logger.warning(f"[WXO_AUTH] No team context for {payload.method} {payload.path}, skipping injection")
+            return HttpPreRequestResult(continue_processing=True)
+
+        # Parse request body and inject team_id
+        try:
+            import json
+
+            logger.info(f"[WXO_AUTH] Original request body type: {type(payload.body)}")
+            logger.info(f"[WXO_AUTH] Original request body: {payload.body[:200] if payload.body else 'None'}")
+
+            body = json.loads(payload.body) if isinstance(payload.body, (str, bytes)) else payload.body
+            logger.info(f"[WXO_AUTH] Parsed body: {body}")
+
+            # Only inject if team_id not already present
+            if body.get("team_id"):
+                logger.info(f"[WXO_AUTH] team_id already present in body: {body.get('team_id')}, skipping injection")
+                return HttpPreRequestResult(continue_processing=True)
+
+            body["team_id"] = team_id
+            body["visibility"] = body.get("visibility", "team")  # Default to team visibility
+
+            modified_body = json.dumps(body)
+            logger.info(f"[WXO_AUTH] ✅ Successfully injected team_id={team_id} (tenant={tenant_id}) into {payload.method} {payload.path}")
+            logger.info(f"[WXO_AUTH] Modified body: {modified_body}")
+
+            return HttpPreRequestResult(
+                continue_processing=True,
+                modified_payload=modified_body,
+                metadata={
+                    "team_id_injected": True,
+                    "team_id": team_id,
+                    "tenant_id": tenant_id,
+                },
+            )
+
+        except Exception as e:
+            logger.error(f"[WXO_AUTH] ❌ Failed to inject team_id into request body: {e}", exc_info=True)
+
+        # If injection fails or team_id already present, continue unchanged
+        logger.warning(f"[WXO_AUTH] Proceeding without injection")
+        return HttpPreRequestResult(continue_processing=True)
 
 
 # Made with Bob

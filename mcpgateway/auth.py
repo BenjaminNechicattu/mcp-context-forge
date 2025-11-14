@@ -149,12 +149,19 @@ async def get_current_user(
                     updated_at=user_dict.get("updated_at", datetime.now(timezone.utc)),
                 )
 
-                # Store auth_method in request.state so it can be accessed by RBAC middleware
+                # Store auth_method and team context in request.state
+                # This allows downstream endpoints to access team_id (e.g., for gateway creation)
                 if request and hasattr(request, "state") and auth_result.metadata:
                     auth_method = auth_result.metadata.get("auth_method")
                     if auth_method:
                         request.state.auth_method = auth_method
                         logger.debug(f"Stored auth_method '{auth_method}' in request.state")
+
+                    # Store team_id from plugin metadata (e.g., WXO tenant team)
+                    team_id = auth_result.metadata.get("team_id")
+                    if team_id:
+                        request.state.wxo_team_id = team_id
+                        logger.debug(f"Stored wxo_team_id '{team_id}' in request.state for downstream use")
 
                 return user
             # If continue_processing=True (no payload), fall through to standard auth
