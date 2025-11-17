@@ -322,34 +322,38 @@ def create_tenant_team_mapping(tenant_id: str, team_slug: str) -> None:
     # No-op for backwards compatibility
 
 
-def generate_team_token(
+async def generate_team_token(
     team_slug: str,
     tenant_id: str,
-    expiry_minutes: int = 60,
-    jwt_claims: dict[str, Any] | None = None
+    user_email: str,
+    expiry_minutes: int = 60
 ) -> str:
-    """Generate a team token for subsequent API operations.
+    """Generate a team token using the TokenCatalogService for proper tracking.
 
-    This function creates a JWT token that represents a team's authenticated session.
-    The token can be used for subsequent API calls without requiring the original WXO JWT.
+    This function creates a JWT token via the TokenCatalogService, ensuring proper
+    database tracking, token management, and integration with the gateway's token
+    infrastructure (revocation, usage tracking, scoping, etc.).
 
     Args:
         team_slug: The team slug (equal to tenant_id).
         tenant_id: The tenant ID from the WXO JWT.
+        user_email: Email of the user requesting the token (for token ownership).
         expiry_minutes: Token expiry time in minutes (default: 60).
-        jwt_claims: Optional original JWT claims to include in team token.
 
     Returns:
-        str: Encoded JWT team token.
+        str: Encoded JWT team token with full service layer support.
 
     Raises:
-        ValueError: If team_slug or tenant_id is None or empty.
+        ValueError: If team_slug, tenant_id, or user_email is None or empty.
 
     Example:
-        >>> token = generate_team_token("tenant-123", "tenant-123", expiry_minutes=120)
+        >>> import asyncio
+        >>> token = asyncio.run(generate_team_token(
+        ...     "tenant-123", "tenant-123", "user@example.com", expiry_minutes=120
+        ... ))
         >>> # Token can now be used for API calls: Authorization: Bearer {token}
     """
-    logger.debug(f"Generating team token for team_slug: {team_slug}, tenant_id: {tenant_id}")
+    logger.debug(f"Generating team token for team_slug: {team_slug}, tenant_id: {tenant_id}, user: {user_email}")
 
     if not team_slug:
         raise ValueError("team_slug cannot be None or empty")
@@ -357,44 +361,70 @@ def generate_team_token(
     if not tenant_id:
         raise ValueError("tenant_id cannot be None or empty")
 
-    # Get the secret key for JWT signing
-    secret_key = settings.jwt_secret_key.get_secret_value() if hasattr(settings.jwt_secret_key, "get_secret_value") else str(settings.jwt_secret_key)
+    if not user_email:
+        raise ValueError("user_email cannot be None or empty")
 
-    # Build team token payload
-    now = datetime.now(timezone.utc)
-    expiry = now + timedelta(minutes=expiry_minutes)
-
-    payload: dict[str, Any] = {
-        "sub": team_slug,  # Subject is the team slug
-        "team_slug": team_slug,
-        "tenant_id": tenant_id,
-        "token_type": "team_token",
-        "iat": int(now.timestamp()),  # Issued at
-        "exp": int(expiry.timestamp()),  # Expiration time
-    }
-
-    # Include audience if configured
-    if settings.jwt_audience:
-        payload["aud"] = settings.jwt_audience
-
-    # Include issuer if configured
-    if hasattr(settings, "jwt_issuer") and settings.jwt_issuer:
-        payload["iss"] = settings.jwt_issuer
-
-    # Optionally include selected claims from original WXO JWT
-    if jwt_claims:
-        # Include specific claims that might be useful for auditing
-        for claim_key in ["email", "username", "name", "woTenantId"]:
-            if claim_key in jwt_claims:
-                payload[f"wxo_{claim_key}"] = jwt_claims[claim_key]
-
-    # Encode the JWT token
     try:
-        token = jwt.encode(payload, secret_key, algorithm=settings.jwt_algorithm)
-        logger.info(f"Successfully generated team token for team '{team_slug}' (expires in {expiry_minutes} minutes)")
-        return token
+        # Get database session
+        db_gen = get_db()
+        db = next(db_gen)
+
+        try:
+            # Import the TokenCatalogService and required models
+            from mcpgateway.services.token_catalog_service import TokenCatalogService, TokenScope
+            from mcpgateway.db import EmailTeam
+
+            # Get team UUID from team_slug (required for create_token)
+            team = db.query(EmailTeam).filter(EmailTeam.slug == team_slug).first()
+            if not team:
+                raise ValueError(f"Team not found for slug: {team_slug}")
+
+            team_id = team.id
+
+            # Create token service instance
+            token_service = TokenCatalogService(db)
+
+            # Create token scope with team-level permissions
+            # Grant full permissions for WXO-authenticated team tokens
+            scope = TokenScope(
+                server_id=None,  # Not scoped to specific server
+                permissions=["*"],  # Full permissions for team
+                ip_restrictions=[],  # No IP restrictions
+                time_restrictions={},
+                usage_limits={}
+            )
+
+            # Convert expiry_minutes to days for the service (round up)
+            expiry_days = max(1, (expiry_minutes + 1439) // 1440)  # Round up to nearest day
+
+            # Generate unique token name with timestamp
+            token_name = f"wxo-team-token-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+
+            # Create the token using the service layer
+            api_token, raw_token = await token_service.create_token(
+                user_email=user_email,
+                name=token_name,
+                description=f"WXO team token for tenant {tenant_id} (auto-generated)",
+                scope=scope,
+                expires_in_days=expiry_days,
+                tags=["wxo", "team-token", f"tenant:{tenant_id}"],
+                team_id=team_id
+            )
+
+            logger.info(
+                f"Successfully generated team token for team '{team_slug}' "
+                f"(ID: {api_token.id}, expires in {expiry_minutes} minutes)"
+            )
+            logger.debug(f"Token metadata: tenant_id={tenant_id}, user={user_email}")
+
+            return raw_token
+
+        finally:
+            # Close the database session
+            db_gen.close()
+
     except Exception as e:
-        logger.error(f"Failed to encode team token: {e}", exc_info=True)
+        logger.error(f"Failed to generate team token: {e}", exc_info=True)
         raise ValueError(f"Failed to generate team token: {e}")
 
 

@@ -160,8 +160,8 @@ async def get_current_user(
                     # Store team_id from plugin metadata (e.g., WXO tenant team)
                     team_id = auth_result.metadata.get("team_id")
                     if team_id:
-                        request.state.wxo_team_id = team_id
-                        logger.debug(f"Stored wxo_team_id '{team_id}' in request.state for downstream use")
+                        request.state.team_id = team_id
+                        logger.debug(f"Stored team_id '{team_id}' in request.state for downstream use")
 
                 return user
             # If continue_processing=True (no payload), fall through to standard auth

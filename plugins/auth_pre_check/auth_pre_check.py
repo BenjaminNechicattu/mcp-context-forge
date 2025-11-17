@@ -262,15 +262,26 @@ class WxoAuthCheckPlugin(Plugin):
 
         logger.info(f"[WXO_AUTH] Using team_slug: {team_slug}")
 
-        # Generate team token for subsequent operations
+        # Extract user email BEFORE generating token (needed for token ownership)
+        user_email = (
+            jwt_claims.get("email")
+            or jwt_claims.get("username")
+            or jwt_claims.get("preferred_username")
+            or jwt_claims.get("upn")
+            or jwt_claims.get("unique_name")
+            or jwt_claims.get("sub")
+            or f"team-{team_slug}@wxo.system"  # Fallback synthetic email
+        )
+
+        # Generate team token for subsequent operations using TokenCatalogService
         try:
-            team_token = generate_team_token(
+            team_token = await generate_team_token(
                 team_slug=team_slug,
                 tenant_id=tenant_id,
+                user_email=user_email,
                 expiry_minutes=self._cfg.team_token_expiry_minutes,
-                jwt_claims=jwt_claims,
             )
-            logger.info(f"[WXO_AUTH] Generated team token for team '{team_slug}'")
+            logger.info(f"[WXO_AUTH] Generated team token for team '{team_slug}' (user: {user_email})")
 
         except Exception as e:
             logger.error(f"[WXO_AUTH] Failed to generate team token: {e}", exc_info=True)
@@ -283,17 +294,6 @@ class WxoAuthCheckPlugin(Plugin):
                     details={"team_slug": team_slug, "error": str(e)},
                 ),
             )
-
-        # Extract user email for synthetic user (required by auth system)
-        user_email = (
-            jwt_claims.get("email")
-            or jwt_claims.get("username")
-            or jwt_claims.get("preferred_username")
-            or jwt_claims.get("upn")
-            or jwt_claims.get("unique_name")
-            or jwt_claims.get("sub")
-            or f"team-{team_slug}@wxo.system"  # Fallback synthetic email
-        )
 
         # Extract full name from JWT claims
         full_name = (
@@ -325,14 +325,15 @@ class WxoAuthCheckPlugin(Plugin):
         # Store team_id in both plugin context AND global context
         # The global context state is accessible to other parts of the application
         # This allows the gateway registration endpoint to retrieve the team_id
-        context.set_state("wxo_team_id", team_id_for_gateway)
+        context.set_state("team_id", team_id_for_gateway)
         context.set_state("wxo_tenant_id", tenant_id)
-        context.set_state("wxo_team_slug", team_slug)
+        context.set_state("team_slug", team_slug)
 
         # Also store in global context for broader access
-        context.global_context.state["wxo_team_id"] = team_id_for_gateway
+        context.global_context.state["team_id"] = team_id_for_gateway
         context.global_context.state["wxo_tenant_id"] = tenant_id
-        context.global_context.state["wxo_team_slug"] = team_slug
+        context.global_context.state["team_slug"] = team_slug
+        context.global_context.state["team_token"] = team_token  # Store for http_pre_request
 
         logger.info("[WXO_AUTH] Stored team context in plugin state and global context for downstream access")
 
@@ -426,84 +427,77 @@ class WxoAuthCheckPlugin(Plugin):
     async def http_pre_request(
         self, payload: HttpPreRequestPayload, context: PluginContext
     ) -> HttpPreRequestResult:
-        """Inject team_id into gateway/server/tool/resource/prompt creation requests.
+        """Inject team token and context headers into requests.
 
-        This hook intercepts POST requests to creation endpoints and injects the
-        team_id from the WXO authentication context into the request body.
+        This hook intercepts requests and injects team-related headers from the
+        WXO authentication context. The team token and IDs are added as custom
+        headers that downstream handlers can use.
+
+        NOTE: http_pre_request can ONLY modify headers, not request body.
+        Body modification is not supported by the ASGI middleware layer.
 
         Args:
-            payload: HTTP pre-request payload with method, path, and body.
+            payload: HTTP pre-request payload with method, path, and headers.
             context: Plugin execution context with team state.
 
         Returns:
-            Result with modified request body containing team_id.
+            Result with modified headers containing team token and context.
         """
         logger.info(f"[WXO_AUTH] http_pre_request called: {payload.method} {payload.path}")
 
-        # Only process POST requests to creation endpoints
-        if payload.method != "POST":
-            logger.debug(f"[WXO_AUTH] Skipping non-POST request: {payload.method}")
-            return HttpPreRequestResult(continue_processing=True)
-
-        # Check if this is a creation endpoint that needs team_id injection
-        creation_endpoints = ["/gateways", "/servers", "/tools", "/resources", "/prompts"]
-        is_creation_request = any(payload.path.startswith(endpoint) or payload.path == endpoint for endpoint in creation_endpoints)
-
-        if not is_creation_request:
-            logger.debug(f"[WXO_AUTH] Skipping non-creation endpoint: {payload.path}")
-            return HttpPreRequestResult(continue_processing=True)
-
-        logger.info(f"[WXO_AUTH] Processing creation request: {payload.method} {payload.path}")
-
-        # Get team context from global context (set during authentication)
-        team_id = context.global_context.state.get("wxo_team_id")
+        # Get team context from global context (set during http_auth_resolve_user)
+        team_id = context.global_context.state.get("team_id")
         tenant_id = context.global_context.state.get("wxo_tenant_id")
+        team_slug = context.global_context.state.get("team_slug")
+        team_token = context.global_context.state.get("team_token")
 
-        logger.info(f"[WXO_AUTH] Team context from global state: team_id={team_id}, tenant_id={tenant_id}")
-        logger.info(f"[WXO_AUTH] Global context state keys: {list(context.global_context.state.keys())}")
+        logger.info(f"[WXO_AUTH] Team context from global state: team_id={team_id}, tenant_id={tenant_id}, team_slug={team_slug}, team_token={'***' if team_token else None}")
+        logger.debug(f"[WXO_AUTH] Global context state keys: {list(context.global_context.state.keys())}")
 
         if not team_id:
             # No WXO team context available, let request proceed unchanged
-            logger.warning(f"[WXO_AUTH] No team context for {payload.method} {payload.path}, skipping injection")
+            logger.debug("[WXO_AUTH] No team context available, skipping header injection")
             return HttpPreRequestResult(continue_processing=True)
 
-        # Parse request body and inject team_id
+        # Inject team context as custom headers
         try:
-            import json
+            from mcpgateway.plugins.framework import HttpHeaderPayload
 
-            logger.info(f"[WXO_AUTH] Original request body type: {type(payload.body)}")
-            logger.info(f"[WXO_AUTH] Original request body: {payload.body[:200] if payload.body else 'None'}")
+            # Create modified headers with team context
+            modified_headers = {}
 
-            body = json.loads(payload.body) if isinstance(payload.body, (str, bytes)) else payload.body
-            logger.info(f"[WXO_AUTH] Parsed body: {body}")
+            # Add team identification headers
+            modified_headers["X-Team-Id"] = str(team_id)
+            modified_headers["X-Tenant-Id"] = str(tenant_id)
 
-            # Only inject if team_id not already present
-            if body.get("team_id"):
-                logger.info(f"[WXO_AUTH] team_id already present in body: {body.get('team_id')}, skipping injection")
-                return HttpPreRequestResult(continue_processing=True)
+            if team_slug:
+                modified_headers["X-Team-Slug"] = str(team_slug)
 
-            body["team_id"] = team_id
-            body["visibility"] = body.get("visibility", "team")  # Default to team visibility
+            # Add team token if available (for downstream MCP server authentication)
+            if team_token:
+                modified_headers["X-Team-Token"] = str(team_token)
+                logger.info("[WXO_AUTH] ✅ Injecting team token into headers")
 
-            modified_body = json.dumps(body)
-            logger.info(f"[WXO_AUTH] ✅ Successfully injected team_id={team_id} (tenant={tenant_id}) into {payload.method} {payload.path}")
-            logger.info(f"[WXO_AUTH] Modified body: {modified_body}")
+            logger.info(f"[WXO_AUTH] ✅ Injected team headers: {list(modified_headers.keys())}")
+            logger.debug(f"[WXO_AUTH] Team header values: team_id={team_id}, tenant_id={tenant_id}, team_slug={team_slug}")
 
             return HttpPreRequestResult(
                 continue_processing=True,
-                modified_payload=modified_body,
+                modified_payload=HttpHeaderPayload(root=modified_headers),
                 metadata={
-                    "team_id_injected": True,
+                    "team_headers_injected": True,
                     "team_id": team_id,
                     "tenant_id": tenant_id,
+                    "team_slug": team_slug,
+                    "team_token_injected": bool(team_token),
                 },
             )
 
         except Exception as e:
-            logger.error(f"[WXO_AUTH] ❌ Failed to inject team_id into request body: {e}", exc_info=True)
+            logger.error(f"[WXO_AUTH] ❌ Failed to inject team headers: {e}", exc_info=True)
 
-        # If injection fails or team_id already present, continue unchanged
-        logger.warning(f"[WXO_AUTH] Proceeding without injection")
+        # If injection fails, continue unchanged
+        logger.warning("[WXO_AUTH] Proceeding without team header injection")
         return HttpPreRequestResult(continue_processing=True)
 
 

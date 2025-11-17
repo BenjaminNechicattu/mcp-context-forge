@@ -3392,8 +3392,8 @@ async def register_gateway(
         visibility = gateway.visibility
 
         # Check if plugin set team_id in request.state (e.g., WXO auth plugin)
-        if not team_id and hasattr(request.state, "wxo_team_id"):
-            team_id = getattr(request.state, "wxo_team_id")
+        if not team_id and hasattr(request.state, "team_id"):
+            team_id = getattr(request.state, "team_id")
             logger.info(f"Using team_id from plugin context: {team_id}")
 
         # If no team specified, get user's personal team
