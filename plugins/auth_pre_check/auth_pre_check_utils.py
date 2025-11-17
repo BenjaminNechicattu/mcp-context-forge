@@ -262,7 +262,7 @@ async def create_team(tenant_id: str, team_slug: str | None = None, user_email: 
                 name=tenant_id,  # Use tenant_id as team name
                 description=f"Team for tenant {tenant_id}",
                 created_by=user_email,  # Use authenticated user's email
-                visibility="private",
+                visibility="public",
                 max_members=None
             )
 
