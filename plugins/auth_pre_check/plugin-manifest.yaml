@@ -1,0 +1,18 @@
+description: "WXO authentication and tenant/team management plugin. Validates WXO JWT tokens, exchanges them for team tokens, and manages team-based access control."
+author: "MCP Context Forge Team"
+version: "0.1.0"
+available_hooks:
+  - "http_auth_resolve_user"
+  - "http_post_request"
+  - "http_pre_request"
+default_configs:
+  require_auth: true
+  allowed_auth_types:
+    - "bearer"
+  check_token_format: true
+  block_on_missing_auth: true
+  auth_header: "Authorization"
+  auto_create_teams: true
+  audit_auth_attempts: true
+  strict_mode: true
+  team_token_expiry_minutes: 60

@@ -36,6 +36,23 @@ plugins:
       audit_auth_attempts: true
       strict_mode: false  # false = fallback to standard auth, true = block invalid tokens
 
+  - name: "WXOConnections"
+    kind: "plugins.wxo_connections.wxo_connections.WXOConnectionsPlugin"
+    description: "Connects to wxo-connection manager service to retrieve pass-through headers before tool invocation"
+    version: "0.1.0"
+    author: "ContextForge"
+    hooks: ["tool_pre_invoke"]
+    tags: ["headers", "integration", "external-service", "tool-enhancement"]
+    mode: "permissive"  # enforce | permissive | disabled
+    priority: 30  # Run early, before most other plugins
+    conditions: []  # Apply to all tools by default
+    config:
+      service_url: "http://localhost:8080/api/headers"
+      timeout: 5
+      api_key: null  # Set via environment variable or config
+      tool_names: null  # null = apply to all tools, or specify list: ["tool1", "tool2"]
+
+
   # Argument Normalizer - stabilize inputs before anything else
   - name: "ArgumentNormalizer"
     kind: "plugins.argument_normalizer.argument_normalizer.ArgumentNormalizerPlugin"
