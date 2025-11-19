@@ -15,7 +15,7 @@ Hook: tool_pre_invoke
 from __future__ import annotations
 
 # Standard
-from typing import Optional
+from typing import Optional, Any, Dict, cast
 
 # Third-Party
 from pydantic import BaseModel, Field
@@ -102,10 +102,26 @@ class WXOConnectionsPlugin(Plugin):
         connection_id = payload.args.get('connection_id', None)
         environment_id = payload.args.get('environment_id', None)
 
+        logger.info(f"[WXO Connections] Fetching headers for tool '{payload.name}' with connection_id '{connection_id}' and environment_id '{environment_id}'")
+        logger.info(f"[WXO Connections] payload: {payload}")
+
+
         if connection_id:
             from wxo_connections_client import get_runtime_credentials, process_credentials
 
-            creds = get_runtime_credentials(self, connection_id=connection_id, env=environment_id)
+            # Safely retrieve wxo_access_token from global context state
+            access_token = context.global_context.state.get("wxo_access_token")
+            if not access_token:
+                logger.error(f"[WXO Connections] wxo_access_token not found in global context for tool '{payload.name}'")
+                logger.debug(f"[WXO Connections] Available global context keys: {list(context.global_context.state.keys())}")
+                return {}
+
+            # Ensure connection_id is a string
+            conn_id_str = str(connection_id) if connection_id else ""
+            env_str = str(environment_id) if environment_id else "draft"
+            token_str = str(access_token)
+
+            creds = get_runtime_credentials(connection_id=conn_id_str, access_token=token_str, env=env_str)
             if not creds:
                 logger.warning(f"[WXO Connections] No credentials returned from connection manager for connection_id '{connection_id}'")
                 return {}
@@ -147,15 +163,23 @@ class WXOConnectionsPlugin(Plugin):
                 return ToolPreInvokeResult(continue_processing=True)
 
             # Merge headers into the payload
-            current_headers = payload.headers.model_dump() if payload.headers else {}
-            merged_headers = {**current_headers, **additional_headers}
+            current_headers: dict[str, str] = {}
+            if payload.headers:
+                dumped = payload.headers.model_dump()
+                if isinstance(dumped, dict):
+                    # Cast the untyped model_dump() result to a typed dict so static checkers know the item types.
+                    dumped_dict = cast(Dict[Any, Any], dumped)
+                    current_headers = {str(k): str(v) for k, v in dumped_dict.items()}
+
+            # Merge additional headers (ensure all values are strings)
+            merged_headers: dict[str, str] = {**current_headers, **additional_headers}
 
             # Create modified payload with updated headers
             from mcpgateway.plugins.framework.hooks.http import HttpHeaderPayload
             new_payload = ToolPreInvokePayload(
                 name=payload.name,
                 args=payload.args,
-                headers=HttpHeaderPayload(**merged_headers)
+                headers=HttpHeaderPayload(root=merged_headers)
             )
 
             logger.info(

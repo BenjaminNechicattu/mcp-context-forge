@@ -2,6 +2,16 @@
 
 import base64
 from typing import Dict, Any, Optional
+import os
+import logging
+import requests
+
+# Initialize logger
+_logger = logging.getLogger(__name__)
+
+# Timeout constants for HTTP requests
+CONNECT_TIMEOUT_SEC = 5
+READ_TIMEOUT_SEC = 10
 
 
 def basic_auth(username: str, password: str) -> str:
@@ -19,7 +29,8 @@ def basic_auth(username: str, password: str) -> str:
     return base64.b64encode(credentials.encode()).decode()
 
 
-const PASS_THROUGH_HEADER = "X-Upstream-Authorization"
+PASS_THROUGH_HEADER = "X-Upstream-Authorization"
+CONNECTION_MANAGER_BASE_URL: Optional[str] = os.getenv("CONNECTION_MANAGER_BASE_URL", "http://localhost:3001")
 
 
 def process_credentials(creds: Dict[str, Any], headers: Optional[Dict[str, str]] = None, query_params: Optional[Dict[str, str]] = None) -> tuple[Dict[str, str], Dict[str, str]]:
@@ -98,12 +109,13 @@ def process_credentials(creds: Dict[str, Any], headers: Optional[Dict[str, str]]
 # Made with Bob
 
 
-def get_runtime_credentials(self, connection_id: str, env: str = "draft") -> Dict:
+def get_runtime_credentials(connection_id: str, access_token: str, env: str = "draft") -> Dict[str, Any]:
     """
     Get runtime credentials from connection manager for a specific connection.
 
     Args:
         connection_id: Connection ID to get credentials for
+        access_token: Bearer token for authentication
         env: Environment (e.g., 'live', 'draft')
 
     Returns:
@@ -111,8 +123,12 @@ def get_runtime_credentials(self, connection_id: str, env: str = "draft") -> Dic
     """
     response = None
     try:
-        url = f"{self.connections_url}/api/v1/orchestrate/connections/applications/runtime_credentials?connection_id={connection_id}&env={env}"
-        headers = self._get_headers()
+        url = f"{CONNECTION_MANAGER_BASE_URL}/api/v1/orchestrate/connections/applications/runtime_credentials?connection_id={connection_id}&env={env}"
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/json",
+            "Content-Type": "application/json"
+        }
 
         _logger.info(f"[WXO Connections] Getting credentials from connection manager for connection_id: {connection_id}")
         response = requests.get(
@@ -127,7 +143,7 @@ def get_runtime_credentials(self, connection_id: str, env: str = "draft") -> Dic
         if response is not None:
             try:
                 return response.json()
-            except:
-                pass
+            except Exception:
+                _logger.debug("Could not parse error response as JSON")
         return {}
 

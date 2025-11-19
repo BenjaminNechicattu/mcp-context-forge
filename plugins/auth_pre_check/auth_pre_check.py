@@ -328,12 +328,14 @@ class WxoAuthCheckPlugin(Plugin):
         context.set_state("team_id", team_id_for_gateway)
         context.set_state("wxo_tenant_id", tenant_id)
         context.set_state("team_slug", team_slug)
+        context.set_state("wxo_access_token", token)
 
         # Also store in global context for broader access
         context.global_context.state["team_id"] = team_id_for_gateway
         context.global_context.state["wxo_tenant_id"] = tenant_id
         context.global_context.state["team_slug"] = team_slug
         context.global_context.state["team_token"] = team_token  # Store for http_pre_request
+        context.global_context.state["wxo_access_token"] = token  # Store for http_pre_request
 
         logger.info("[WXO_AUTH] Stored team context in plugin state and global context for downstream access")
 
