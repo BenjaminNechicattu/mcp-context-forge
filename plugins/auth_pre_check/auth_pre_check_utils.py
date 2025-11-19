@@ -9,7 +9,8 @@ Utility functions for WXO_AUTH_CHECK Plugin.
 
 # Standard
 import logging
-from datetime import datetime, timedelta, timezone
+import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 # Third-Party
@@ -397,8 +398,11 @@ async def generate_team_token(
             # Convert expiry_minutes to days for the service (round up)
             expiry_days = max(1, (expiry_minutes + 1439) // 1440)  # Round up to nearest day
 
-            # Generate unique token name with timestamp
-            token_name = f"wxo-team-token-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+            # Generate unique token name with timestamp and UUID to prevent collisions
+            # Include microseconds and a short UUID suffix for guaranteed uniqueness
+            timestamp = datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S-%f')
+            unique_suffix = str(uuid.uuid4())[:8]
+            token_name = f"wxo-team-token-{timestamp}-{unique_suffix}"
 
             # Create the token using the service layer
             api_token, raw_token = await token_service.create_token(
