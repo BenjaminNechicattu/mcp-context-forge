@@ -84,6 +84,8 @@ class HttpAuthMiddleware(BaseHTTPMiddleware):
             client_host = request.client.host
             client_port = request.client.port
 
+        logger.info(f"[EX_DBUG] request before plugin : {request}")
+
         # PRE-REQUEST HOOK: Allow plugins to transform headers before authentication
         try:
             pre_result, context_table = await self.plugin_manager.invoke_hook(
@@ -99,6 +101,8 @@ class HttpAuthMiddleware(BaseHTTPMiddleware):
                 local_contexts=None,
                 violations_as_exceptions=False,  # Don't block on pre-request violations
             )
+
+            logger.info(f"[EX_DBUG] pre_result : {pre_result}")
 
             if context_table:
                 request.state.plugin_context_table = context_table
@@ -122,6 +126,8 @@ class HttpAuthMiddleware(BaseHTTPMiddleware):
                 request.scope["headers"] = [(name.lower().encode(), value.encode()) for name, value in merged_headers.items()]
 
                 logger.debug(f"Pre-request hook modified headers: {list(modified_headers_dict.keys())}")
+
+            logger.info(f"[EX_DBUG] request after plugin : {request}")
 
         except Exception as e:
             # Log but don't fail the request if pre-hook has issues
@@ -150,6 +156,8 @@ class HttpAuthMiddleware(BaseHTTPMiddleware):
                 local_contexts=context_table,  # Pass context from pre-hook
                 violations_as_exceptions=False,  # Don't block on post-request violations
             )
+
+            logger.info(f"[EX_DBUG] post_result : {post_result}")
 
             # Apply modified response headers if plugin returned them
             if post_result.modified_payload:

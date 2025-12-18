@@ -1,0 +1,11 @@
+description: "Connects to wxo-connection manager service to retrieve pass-through headers before tool invocation."
+author: "ContextForge"
+version: "0.1.0"
+tags: ["headers", "integration", "external-service", "tool-enhancement"]
+available_hooks:
+  - "tool_pre_invoke"
+default_config:
+  service_url: "http://localhost:8080/api/headers"
+  timeout: 5
+  api_key: null
+  tool_names: null

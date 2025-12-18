@@ -2564,9 +2564,11 @@ async def list_tools(
 
     # Get user email for team filtering
     user_email = get_user_email(user)
+    logger.info(f"[EX_DBUG] user_email {user_email}")
 
     # Check team_id from token as well
     token_team_id = getattr(request.state, "team_id", None)
+    logger.info(f"[EX_DBUG] Token team ID: {token_team_id}, Requested team ID: {team_id}")
 
     # Check for team ID mismatch
     if team_id is not None and token_team_id is not None and team_id != token_team_id:
@@ -2577,6 +2579,7 @@ async def list_tools(
 
     # Determine final team ID
     team_id = team_id or token_team_id
+    logger.info(f"[EX_DBUG] team_id {team_id}")
 
     # Use team-filtered tool listing
     if team_id or visibility:
@@ -2592,11 +2595,13 @@ async def list_tools(
     # Apply gateway_id filtering if provided
     if gateway_id:
         data = [tool for tool in data if str(tool.gateway_id) == gateway_id]
+    logger.info(f"[EX_DBUG] gateway_id {gateway_id}")
 
     if apijsonpath is None:
         return data
 
     tools_dict_list = [tool.to_dict(use_alias=True) for tool in data]
+    logger.info(f"[EX_DBUG] tools_dict_list {tools_dict_list}")
 
     return jsonpath_modifier(tools_dict_list, apijsonpath.jsonpath, apijsonpath.mapping)
 
@@ -2631,10 +2636,15 @@ async def create_tool(
         # Extract metadata from request
         metadata = MetadataCapture.extract_creation_metadata(request, user)
 
+        logger.info(f"[EX_DBUG] request : {request}")
+
+
         # Get user email and handle team assignment
         user_email = get_user_email(user)
+        logger.info(f"[EX_DBUG] user_email : {user_email}")
 
         token_team_id = getattr(request.state, "team_id", None)
+        logger.info(f"[EX_DBUG] token_team_id : {token_team_id}")
 
         # Check for team ID mismatch
         if team_id is not None and token_team_id is not None and team_id != token_team_id:
@@ -2645,6 +2655,7 @@ async def create_tool(
 
         # Determine final team ID
         team_id = team_id or token_team_id
+        logger.info(f"[EX_DBUG] team_id : {team_id}")
 
         logger.debug(f"User {user_email} is creating a new tool for team {team_id}")
         return await tool_service.register_tool(
@@ -2707,6 +2718,8 @@ async def get_tool(
     """
     try:
         logger.debug(f"User {user} is retrieving tool with ID {tool_id}")
+        logger.info(f"[EX_DBUG] user : {user}")
+
         data = await tool_service.get_tool(db, tool_id)
         if apijsonpath is None:
             return data
@@ -3643,12 +3656,14 @@ async def toggle_gateway_status(
     logger.debug(f"User '{user}' requested toggle for gateway {gateway_id}, activate={activate}")
     try:
         user_email = user.get("email") if isinstance(user, dict) else str(user)
+        logger.info(f"[EX_DBUG] user_email : {user_email}")
         gateway = await gateway_service.toggle_gateway_status(
             db,
             gateway_id,
             activate,
             user_email=user_email,
         )
+        logger.info(f"[EX_DBUG] gateway : {gateway}")
         return {
             "status": "success",
             "message": f"Gateway {gateway_id} {'activated' if activate else 'deactivated'}",
@@ -3688,9 +3703,11 @@ async def list_gateways(
     logger.debug(f"User '{user}' requested list of gateways with include_inactive={include_inactive}")
 
     user_email = get_user_email(user)
+    logger.info(f"[EX_DBUG] user_email : {user_email}")
 
     # Check team_id from token
     token_team_id = getattr(request.state, "team_id", None)
+    logger.info(f"[EX_DBUG] token_team_id : {token_team_id}")
 
     # Check for team ID mismatch
     if team_id is not None and token_team_id is not None and team_id != token_team_id:
@@ -3701,6 +3718,7 @@ async def list_gateways(
 
     # Determine final team ID
     team_id = team_id or token_team_id
+    logger.info(f"[EX_DBUG] team_id : {team_id}")
 
     if team_id or visibility:
         return await gateway_service.list_gateways_for_user(db=db, user_email=user_email, team_id=team_id, visibility=visibility, include_inactive=include_inactive)
@@ -3736,9 +3754,14 @@ async def register_gateway(
 
         # Get user email and handle team assignment
         user_email = get_user_email(user)
+        logger.info(f"[EX_DBUG] user_email : {user_email}")
+
 
         token_team_id = getattr(request.state, "team_id", None)
         gateway_team_id = gateway.team_id
+
+        logger.info(f"[EX_DBUG] token_team_id : {token_team_id}")
+        logger.info(f"[EX_DBUG] gateway_team_id : {gateway_team_id}")
 
         # Check for team ID mismatch
         if gateway_team_id is not None and token_team_id is not None and gateway_team_id != token_team_id:
@@ -3750,6 +3773,7 @@ async def register_gateway(
         # Determine final team ID
         team_id = gateway_team_id or token_team_id
         visibility = gateway.visibility
+        logger.info(f"[EX_DBUG] team_id : {team_id}")
 
         logger.debug(f"User {user_email} is creating a new gateway for team {team_id}")
 
